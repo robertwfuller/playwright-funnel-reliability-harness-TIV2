@@ -1,14 +1,25 @@
 #!/usr/bin/env python3
 """
 tests/test_harness.py
-Scope: Canonical import verification, unit tests, and real Chromium DOM MutationObserver tests (V-04 / G-04).
+Scope: Canonical import verification, unit tests, required fail-closed Chromium DOM MutationObserver tests,
+and deterministic route runner exit-code + JSON artifact tests (Task 2: V-02 / G-02).
 """
 
 import asyncio
+import http.server
+import json
+import socketserver
+import subprocess
+import sys
+import threading
 from pathlib import Path
 import pytest
+from playwright.async_api import async_playwright
 import playwright_funnel_harness_dom_mutation as dom_mod
 from playwright_funnel_harness_dom_mutation import DomStabilityObserver
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+RUNNER_SCRIPT = REPO_ROOT / "stress_test" / "funnel_stress_test.py"
 
 
 class MockPage:
@@ -50,14 +61,13 @@ def test_unit_unexpected_error_propagates():
 
 
 def test_real_browser_dom_stability_cases():
-    playwright_async = pytest.importorskip("playwright.async_api")
-
+    """
+    Fail-closed real Chromium verification (no pytest.skip).
+    Exercises static pages, delayed mutations, and sustained mutations exceeding timeout.
+    """
     async def _run():
-        async with playwright_async.async_playwright() as p:
-            try:
-                browser = await p.chromium.launch(headless=True)
-            except Exception as exc:
-                pytest.skip(f"Chromium binary not available: {exc}")
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
             try:
                 page = await browser.new_page()
 
@@ -95,3 +105,75 @@ def test_real_browser_dom_stability_cases():
                 await browser.close()
 
     asyncio.run(_run())
+
+
+def test_route_runner_deterministic_pass_and_fail_json(tmp_path):
+    """
+    Verifies that stress_test/funnel_stress_test.py deterministically visits every configured route,
+    writes structured JSON artifacts, exits 0 when all routes pass, and exits 1 when any route fails.
+    """
+    pass_html = b"<!DOCTYPE html><html><body><dialog class='ti-report-popup' open>OK</dialog></body></html>"
+    fail_html = b"<!DOCTYPE html><html><body><div>Missing dialog</div></body></html>"
+
+    class LocalHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            if self.path == "/missing-popup":
+                self.wfile.write(fail_html)
+            else:
+                self.wfile.write(pass_html)
+
+        def log_message(self, format, *args):
+            pass
+
+    with socketserver.TCPServer(("127.0.0.1", 0), LocalHandler) as httpd:
+        port = httpd.server_address[1]
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{port}"
+
+        try:
+            # 1. Passing run across 3 deterministic routes
+            pass_json = tmp_path / "pass_report.json"
+            res_pass = subprocess.run(
+                [
+                    sys.executable,
+                    str(RUNNER_SCRIPT),
+                    "--base-url", base_url,
+                    "--routes", "/", "/business-diagnostic", "/the-trust-engine",
+                    "--timeout-ms", "1500",
+                    "--output-json", str(pass_json),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            assert res_pass.returncode == 0, f"Expected 0, got {res_pass.returncode}: {res_pass.stderr}"
+            data_pass = json.loads(pass_json.read_text(encoding="utf-8"))
+            assert data_pass["total_routes"] == 3
+            assert data_pass["passed"] == 3
+            assert data_pass["failed"] == 0
+            assert [r["route"] for r in data_pass["results"]] == ["/", "/business-diagnostic", "/the-trust-engine"]
+
+            # 2. Failing run when a route is missing the popup
+            fail_json = tmp_path / "fail_report.json"
+            res_fail = subprocess.run(
+                [
+                    sys.executable,
+                    str(RUNNER_SCRIPT),
+                    "--base-url", base_url,
+                    "--routes", "/", "/missing-popup",
+                    "--timeout-ms", "1000",
+                    "--output-json", str(fail_json),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            assert res_fail.returncode == 1, f"Expected 1, got {res_fail.returncode}"
+            data_fail = json.loads(fail_json.read_text(encoding="utf-8"))
+            assert data_fail["total_routes"] == 2
+            assert data_fail["passed"] == 1
+            assert data_fail["failed"] == 1
+        finally:
+            httpd.shutdown()

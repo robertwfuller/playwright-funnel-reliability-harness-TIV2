@@ -18,6 +18,10 @@ dev = [
     "pytest-asyncio>=0.21.0",
 ]
 
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["playwright_funnel_harness_dom_mutation"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

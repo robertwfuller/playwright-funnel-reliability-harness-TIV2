@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 playwright_funnel_harness/runner/observers/dom_mutation.py
-Asset #14: Core MutationObserver Quiescence Engine.
+Asset #18: Core MutationObserver Quiescence Engine.
 Decouples Playwright from fragile static wait times by waiting for DOM stability.
 """
 
