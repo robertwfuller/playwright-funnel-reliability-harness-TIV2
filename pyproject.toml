@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "playwright-funnel-reliability-harness"
+version = "1.0.0"
+description = "Playwright DOM MutationObserver quiescence harness and deterministic route validator."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "playwright>=1.40.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
